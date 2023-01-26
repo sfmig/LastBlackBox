@@ -110,7 +110,7 @@ class customCOCO2017(torch.utils.data.Dataset):
 def train_transform(
     img1: torch.LongTensor, # img
     img2: torch.LongTensor, # mask
-    IMAGE_SIZE=(64,64)
+    IMAGE_SIZE=(28,28) #(64,64) # 
 ) -> Tuple[torch.LongTensor, torch.LongTensor]:
     '''
     Apply identical transform (random crop and horiz flip) to two images

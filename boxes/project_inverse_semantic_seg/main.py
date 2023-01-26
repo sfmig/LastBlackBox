@@ -22,23 +22,25 @@ from torch.utils.data import DataLoader
 
 import matplotlib.colors as mcolors
 import numpy as np
-# import customUnetModel
+import customUnetModel
+
+from tqdm.auto import tqdm
 
 # local
 import dataset
 importlib.reload(dataset)
-# importlib.reload(customUnetModel)
-
-# %%%%%%%%%%%%%%%%%%%
-# Set up paths
+importlib.reload(customUnetModel)
 
 
 # %%%%%%%%%%%%%%%%%%%%%
 # Set up params and device
 BATCH_SIZE = 64
-IMAGE_SIZE = (128, 128)
+# IMAGE_SIZE = (128, 128)---
 COCO_PATH = '../../COCO'
 list_natural_supcats = ['person','animal','food','outdoor']
+
+N_EPOCHS = 10
+
 map_supercat_str2ids = {k:v+1 for v,k in enumerate(list_natural_supcats)}
 print(map_supercat_str2ids)
 
@@ -117,24 +119,10 @@ valid_dataloader = DataLoader(
     pin_memory=True,
 )
 
-# %%
+# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+# Visualize dataset
 # mask is a 3D tensor w/ semantic labels along 'channnel' dimension
-img, mask = train_data[12] # 10
-plt.figure()
-plt.imshow(TF.to_pil_image(img))
-plt.show()
-for t in range(mask.shape[0]):
-    # if np.max(mask[t,:,:].numpy()) > 0:
-        plt.imshow(mask[t,:,:])
-        if t==0:
-            plt.title('background')
-        else:
-            plt.title(list(train_data.map_supercat_ids.keys())[list(train_data.map_supercat_ids.values()).index(t)])
-        plt.colorbar()
-        plt.show()
-
-# %%
-# change mask to be 3D tensor? to have semantic labels along 'channnel' dimension
+# img, mask = train_data[12] # 10
 img, mask = next(iter(train_dataloader)) # get a batch
 img, mask = img[0], mask[0]
 plt.figure()
@@ -150,52 +138,65 @@ for t in range(mask.shape[0]):
         plt.colorbar()
         plt.show()
 
-# plt.figure()
-# plt.subplot(1,2,1)
-# plt.imshow(TF.to_pil_image(img))
-# plt.subplot(1,2,2)
-# plt.imshow(mask.squeeze())
-# plt.colorbar()
-# plt.show()
-
-
-# %%
-# visualise ----
-# img, mask = next(iter(train_dataloader))  # train_data[22]
-# plot first of the batch!
-plt.figure(figsize=(12, 5))
-plt.subplot(121)
-plt.imshow(TF.to_pil_image(img[0,:,:,:]))
-plt.subplot(122)
-plt.imshow(mask[0,:,:,:].squeeze()) #, cmap=mcolors.TABLEAU_COLORS)
-plt.colorbar()
-plt.show()
-
-# View some examples from the training set
-# x, y = next(iter(train_dataloader))
-# print('Input shape:', x.shape)
-# print('Labels:', y)
-# plt.imshow(torchvision.utils.make_grid(x)[0], cmap='Greys')
 
 # %%%%%%%%%%%%%%%%%%%%%%%%%%
 # Instantiate model
 
+model = customUnetModel.ClassConditionedUnet().to(device)
 
 
 # %%%%%%%%%%%%%%%%%%%%%%%
 # Prepare for training
 
 # scheduler
+noise_scheduler = DDPMScheduler(num_train_timesteps=1000, beta_schedule='squaredcos_cap_v2')
 
 # loss fn
+loss_fn = nn.MSELoss()
 
 # optimizer
-
+opt = torch.optim.Adam(model.parameters(), lr=1e-3) 
 
 # %%%%%%%%%%%%%%%%%%%%%%
 # Training loop
 # ideally: plot as we go? plot on test set too?
 
+# Keeping a record of the losses for later viewing
+losses = []
+
+# The training loop
+for epoch in range(N_EPOCHS):
+    for x, y_masks in tqdm(train_dataloader):
+        
+        # Get some data and prepare the corrupted version
+        x = x.to(device) * 2 - 1 # Data on the GPU (mapped to (-1, 1))
+        y_masks = y_masks.to(device)
+        noise = torch.randn_like(x)
+        timesteps = torch.randint(0, 999, (x.shape[0],)).long().to(device)
+        noisy_x = noise_scheduler.add_noise(x, noise, timesteps)
+
+        # Get the model prediction for the noise
+        pred = model(noisy_x, timesteps, y_masks) # Note that we pass in the labels y
+
+        # Calculate the loss comparing to the actual noise
+        loss = loss_fn(pred, noise) # How close is the output to the noise
+
+        # Backprop and update the params:
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+
+        # Store the loss for later
+        losses.append(loss.item())
+
+    # Print our the average of the last 100 loss values to get an idea of progress:
+    avg_loss = sum(losses[-100:])/100
+    print(f'Finished epoch {epoch}. Average of the last 100 loss values: {avg_loss:05f}')
+
+# %%
+# View the loss curve
+plt.plot(losses)
+plt.show()
 
 # %%%%%%%%%%%%%%%%%%
 # Sampling / inference
